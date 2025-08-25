@@ -34,7 +34,7 @@ jobs:
         
     - name: Build APK
       run: |
-        buildozer android debug
+        buildozer -f ../buildozer.spec android debug
         
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
