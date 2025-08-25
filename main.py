@@ -1,6 +1,6 @@
 """
-Android ANPR App - Lightweight Version
-This version uses basic OpenCV for initial testing and can be upgraded with ML later
+Full Android ANPR App with ML Capabilities
+This version includes YOLOv8 license plate detection and PaddleOCR text recognition
 """
 
 import kivy
@@ -18,44 +18,152 @@ import time
 import requests
 import cv2
 import numpy as np
+from ultralytics import YOLO
+from paddleocr import PaddleOCR
 import os
 
 # For Android permissions
 if platform == 'android':
     from android.permissions import request_permissions, Permission
 
-class SimplePlateDetector:
-    def __init__(self):
-        # Simple contour-based detection for testing
-        self.min_area = 1000
-        self.max_area = 50000
+class PlateTracker:
+    def __init__(self, max_disappeared=30, max_distance=50):
+        self.next_object_id = 0
+        self.objects = {}
+        self.disappeared = {}
+        self.max_disappeared = max_disappeared
+        self.max_distance = max_distance
+        self.text_history = {}
+        self.stable_text = {}
         
-    def detect_plates(self, frame):
-        """Simple plate detection using contour analysis"""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blurred, 50, 150)
+    def register(self, centroid, text=""):
+        self.objects[self.next_object_id] = centroid
+        self.disappeared[self.next_object_id] = 0
+        self.text_history[self.next_object_id] = [text] if text else []
+        self.stable_text[self.next_object_id] = text
+        self.next_object_id += 1
         
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def deregister(self, object_id):
+        del self.objects[object_id]
+        del self.disappeared[object_id]
+        if object_id in self.text_history:
+            del self.text_history[object_id]
+        if object_id in self.stable_text:
+            del self.stable_text[object_id]
+            
+    def update(self, rects, texts):
+        if len(rects) == 0:
+            for object_id in list(self.disappeared.keys()):
+                self.disappeared[object_id] += 1
+                if self.disappeared[object_id] > self.max_disappeared:
+                    self.deregister(object_id)
+            return self.objects.copy()
+            
+        input_centroids = np.array([self._get_centroid(rect) for rect in rects])
+        
+        if len(self.objects) == 0:
+            for i in range(len(input_centroids)):
+                self.register(input_centroids[i], texts[i] if i < len(texts) else "")
+        else:
+            object_ids = list(self.objects.keys())
+            object_centroids = list(self.objects.values())
+            
+            distances = self._calculate_distances(object_centroids, input_centroids)
+            rows = distances.min(axis=1).argsort()
+            cols = distances.argmin(axis=1)[rows]
+            
+            used_rows = set()
+            used_cols = set()
+            
+            for (row, col) in zip(rows, cols):
+                if row in used_rows or col in used_cols:
+                    continue
+                    
+                if distances[row, col] > self.max_distance:
+                    continue
+                    
+                object_id = object_ids[row]
+                self.objects[object_id] = input_centroids[col]
+                self.disappeared[object_id] = 0
+                
+                if col < len(texts) and texts[col]:
+                    self.text_history[object_id].append(texts[col])
+                    if len(self.text_history[object_id]) > 5:
+                        self.text_history[object_id].pop(0)
+                    self.stable_text[object_id] = self._get_most_common(self.text_history[object_id])
+                
+                used_rows.add(row)
+                used_cols.add(col)
+                
+            unused_rows = set(range(len(object_centroids))).difference(used_rows)
+            unused_cols = set(range(len(input_centroids))).difference(used_cols)
+            
+            if len(object_centroids) >= len(input_centroids):
+                for row in unused_rows:
+                    object_id = object_ids[row]
+                    self.disappeared[object_id] += 1
+                    if self.disappeared[object_id] > self.max_disappeared:
+                        self.deregister(object_id)
+            else:
+                for col in unused_cols:
+                    self.register(input_centroids[col], texts[col] if col < len(texts) else "")
+                    
+        return self.objects.copy()
+    
+    def _get_centroid(self, rect):
+        x, y, w, h = rect
+        return (int(x + w // 2), int(y + h // 2))
+    
+    def _calculate_distances(self, centroids1, centroids2):
+        distances = np.zeros((len(centroids1), len(centroids2)))
+        for i, c1 in enumerate(centroids1):
+            for j, c2 in enumerate(centroids2):
+                distances[i, j] = np.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
+        return distances
+    
+    def _get_most_common(self, text_list):
+        if not text_list:
+            return ""
+        from collections import Counter
+        return Counter(text_list).most_common(1)[0][0]
+
+class LicensePlateDetector:
+    def __init__(self, model_path="license_plate_detector.pt"):
+        self.model = YOLO(model_path)
+        self.ocr = PaddleOCR(use_angle_cls=True, lang='en')
+        self.tracker = PlateTracker()
+        
+    def detect_and_recognize(self, frame):
+        results = self.model(frame)
         plates = []
         
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if self.min_area < area < self.max_area:
-                x, y, w, h = cv2.boundingRect(contour)
-                aspect_ratio = w / float(h)
-                
-                # License plates typically have aspect ratio between 2.0 and 5.0
-                if 2.0 < aspect_ratio < 5.0:
-                    plates.append({
-                        'bbox': (x, y, w, h),
-                        'text': f"PLATE_{len(plates)+1}",
-                        'confidence': 0.8
-                    })
+        for result in results:
+            boxes = result.boxes
+            if boxes is not None:
+                for box in boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    
+                    # Crop the license plate
+                    plate_img = frame[y1:y2, x1:x2]
+                    if plate_img.size == 0:
+                        continue
+                        
+                    # OCR on the cropped plate
+                    ocr_result = self.ocr.ocr(plate_img, cls=True)
+                    if ocr_result and ocr_result[0]:
+                        text = ocr_result[0][0][1][0]
+                        confidence = ocr_result[0][0][1][1]
+                        if confidence > 0.5:  # Filter low confidence results
+                            plates.append({
+                                'bbox': (x1, y1, x2-x1, y2-y1),
+                                'text': text,
+                                'confidence': confidence
+                            })
         
         return plates
 
-class ANPRApp(BoxLayout):
+class FullANPRApp(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
@@ -70,8 +178,9 @@ class ANPRApp(BoxLayout):
         # API configuration
         self.api_url = "https://www.corezoid.com/api/2/json/public/1714853/0a04e6b3904e3b837ae4c6ba4d8c70a9311a90e7"
         
-        # Initialize detector
-        self.detector = SimplePlateDetector()
+        # Initialize ML components
+        self.detector = None
+        self.init_ml_components()
         
         # Setup UI
         self.setup_ui()
@@ -80,10 +189,18 @@ class ANPRApp(BoxLayout):
         if platform == 'android':
             self.request_android_permissions()
         
+    def init_ml_components(self):
+        """Initialize ML components"""
+        try:
+            self.detector = LicensePlateDetector()
+            self.log_message("ML components initialized successfully")
+        except Exception as e:
+            self.log_message(f"Error initializing ML components: {str(e)}")
+        
     def setup_ui(self):
         """Setup the user interface"""
         # Title
-        title_label = Label(text='ANPR Camera App (Lightweight)', size_hint_y=0.1, font_size='20sp')
+        title_label = Label(text='ANPR Camera App (Full ML Version)', size_hint_y=0.1, font_size='20sp')
         
         # Status labels
         self.status_label = Label(text='Ready to start', size_hint_y=0.05)
@@ -189,7 +306,7 @@ class ANPRApp(BoxLayout):
         self.in_thread.start()
         self.out_thread.start()
         
-        self.log_message("Started license plate detection (Lightweight Mode)")
+        self.log_message("Started license plate detection")
     
     def stop_detection(self, instance=None):
         """Stop license plate detection"""
@@ -225,10 +342,10 @@ class ANPRApp(BoxLayout):
                 break
             
             frame_count += 1
-            # Process every 30th frame to reduce CPU usage
-            if frame_count % 30 == 0:
+            # Process every 10th frame to reduce CPU usage
+            if frame_count % 10 == 0 and self.detector:
                 try:
-                    plates = self.detector.detect_plates(frame)
+                    plates = self.detector.detect_and_recognize(frame)
                     for plate in plates:
                         text = plate['text']
                         confidence = plate['confidence']
@@ -263,7 +380,7 @@ class ANPRApp(BoxLayout):
 
 class ANPRApp(App):
     def build(self):
-        return ANPRApp()
+        return FullANPRApp()
 
 if __name__ == '__main__':
     ANPRApp().run()
