@@ -32,6 +32,10 @@ jobs:
       run: |
         pip3 install buildozer cython
         
+    - name: Clean buildozer cache
+      run: |
+        buildozer android clean
+        
     - name: Build APK
       run: |
         buildozer android debug
