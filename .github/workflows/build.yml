@@ -1,0 +1,50 @@
+name: Build Android ANPR App
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3 python3-pip git zip unzip openjdk-8-jdk
+        sudo apt-get install -y autoconf libtool pkg-config zlib1g-dev
+        sudo apt-get install -y libncurses5-dev libncursesw5-dev libtinfo5
+        sudo apt-get install -y cmake libffi-dev libssl-dev
+        
+    - name: Install Python dependencies
+      run: |
+        pip3 install buildozer cython
+        
+    - name: Build APK
+      run: |
+        cd android_anpr_app
+        buildozer android debug
+        
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: anpr-app-apk
+        path: android_anpr_app/bin/*.apk
+        
+    - name: Upload build logs
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-logs
+        path: android_anpr_app/.buildozer/
