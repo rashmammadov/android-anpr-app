@@ -45,7 +45,7 @@ android.minapi = 21
 android.sdk = 31
 
 # (str) Android NDK version to use
-android.ndk = 25b
+android.ndk = 23b
 
 # (bool) If True, then automatically accept SDK license
 # agreements. This is intended for automation only. If set to False,
