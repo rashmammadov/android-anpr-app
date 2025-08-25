@@ -32,9 +32,15 @@ jobs:
       run: |
         pip3 install buildozer cython
         
+    - name: Copy buildozer.spec and main.py
+      run: |
+        cp ../buildozer.spec .
+        cp ../main.py .
+        cp ../license_plate_detector.pt .
+        
     - name: Build APK
       run: |
-        buildozer -f ../buildozer.spec android debug
+        buildozer android debug
         
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
