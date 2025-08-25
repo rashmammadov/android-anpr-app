@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = ANPR Camera Simple
+title = ANPR Camera
 
 # (str) Package name
-package.name = anprcamerasimple
+package.name = anprcamera
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.anpr
@@ -13,14 +13,14 @@ package.domain = org.anpr
 source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,pt
 
 # (str) Application versioning (method 1)
 version = 0.1
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,requests,plyer
+requirements = python3,kivy,opencv-python,numpy,ultralytics,torch,torchvision,pillow,paddlepaddle,paddleocr,plyer,requests
 
 # (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait
